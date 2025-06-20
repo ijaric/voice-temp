@@ -1,9 +1,9 @@
 import { ConnectionService, MessageHandlerContext, Connection } from '../../connection-manager';
 import { AudioService } from '../services/AudioService';
-import { OpenAIRealtimeService } from '../services/OpenAIRealtimeService';
+import { AIAgentGraph } from '../AIAgentGraph.js';
 
 export class MessageHandler {
-  private openAIService: OpenAIRealtimeService;
+  private agentGraph: AIAgentGraph;
   private activeConnections = new Map<string, { openAIConnected: boolean }>();
 
   constructor(
@@ -11,22 +11,22 @@ export class MessageHandler {
     private audioService: AudioService,
     openAIApiKey: string
   ) {
-    this.openAIService = new OpenAIRealtimeService(openAIApiKey);
+    this.agentGraph = new AIAgentGraph(openAIApiKey);
     this.setupOpenAIEventHandlers();
   }
 
   private setupOpenAIEventHandlers(): void {
     // Handle OpenAI connection events
-    this.openAIService.on('connected', () => {
+    this.agentGraph.on('connected', () => {
       console.log('OpenAI Realtime API connected');
     });
 
-    this.openAIService.on('error', (error) => {
+    this.agentGraph.on('error', (error: any) => {
       console.error('OpenAI Realtime API error:', error);
     });
 
     // Handle audio responses from OpenAI
-    this.openAIService.on('audio.delta', async (audioBase64: string) => {
+    this.agentGraph.on('audio.delta', async (audioBase64: string) => {
       console.log('Received audio delta from OpenAI');
       
       // Convert base64 to ArrayBuffer
@@ -51,7 +51,7 @@ export class MessageHandler {
     });
 
     // Handle text responses from OpenAI
-    this.openAIService.on('text.delta', async (textDelta: string) => {
+    this.agentGraph.on('text.delta', async (textDelta: string) => {
       console.log('OpenAI text response:', textDelta);
       
       // Send text response to all active connections
@@ -70,7 +70,7 @@ export class MessageHandler {
     });
 
     // Handle speech detection
-    this.openAIService.on('speech.started', async () => {
+    this.agentGraph.on('speech.started', async () => {
       console.log('Speech started detected by OpenAI');
       // Notify clients that speech was detected
       for (const [connectionId, connectionState] of this.activeConnections) {
@@ -83,7 +83,7 @@ export class MessageHandler {
       }
     });
 
-    this.openAIService.on('speech.stopped', async () => {
+    this.agentGraph.on('speech.stopped', async () => {
       console.log('Speech stopped detected by OpenAI');
       // Notify clients that speech stopped
       for (const [connectionId, connectionState] of this.activeConnections) {
@@ -97,7 +97,7 @@ export class MessageHandler {
     });
 
     // Handle complete responses
-    this.openAIService.on('response.done', (response) => {
+    this.agentGraph.on('response.done', (response: any) => {
       console.log('OpenAI response completed:', {
         id: response.response?.id,
         status: response.response?.status,
@@ -106,10 +106,12 @@ export class MessageHandler {
     });
 
     // Handle session closing initiated by OpenAI
-    this.openAIService.on('session.closing', async (event) => {
+    this.agentGraph.on('session.closing', async (event: any) => {
       console.log('OpenAI session closing, notifying all active clients', event);
+      let sessionClosed = false;
       for (const [connectionId, connectionState] of this.activeConnections) {
         if (connectionState.openAIConnected) {
+          sessionClosed = true;
           // Send a specific closing event to the client
           await this.connectionService.sendMessage(connectionId, {
             type: 'ai_session_closing',
@@ -120,6 +122,11 @@ export class MessageHandler {
           // We will still stop the session on the backend.
           await this.handleStopAISession(connectionId);
         }
+      }
+
+      if (sessionClosed && this.agentGraph.getOpenAIService().connected) {
+        console.log('AI session is over. Disconnecting from OpenAI.');
+        await this.agentGraph.invoke('system', { type: 'disconnect' });
       }
     });
   }
@@ -179,9 +186,9 @@ export class MessageHandler {
     this.activeConnections.delete(connection.id);
     
     // If no more active connections, disconnect from OpenAI
-    if (this.activeConnections.size === 0 && this.openAIService.connected) {
+    if (this.activeConnections.size === 0 && this.agentGraph.getOpenAIService().connected) {
       console.log('No active connections remaining, disconnecting from OpenAI');
-      this.openAIService.disconnect();
+      await this.agentGraph.invoke('system', { type: 'disconnect' });
     }
   }
 
@@ -190,9 +197,7 @@ export class MessageHandler {
     
     try {
       // Connect to OpenAI if not already connected
-      if (!this.openAIService.connected) {
-        await this.openAIService.connect();
-      }
+      await this.agentGraph.invoke(connectionId, { type: 'start_session' });
       
       // Mark this connection as using OpenAI
       const connectionState = this.activeConnections.get(connectionId);
@@ -232,7 +237,7 @@ export class MessageHandler {
       return;
     }
 
-    if (!this.openAIService.connected) {
+    if (!this.agentGraph.getOpenAIService().connected) {
       console.error('OpenAI service not connected');
       return;
     }
@@ -263,7 +268,7 @@ export class MessageHandler {
       console.log(`Sending audio data to OpenAI: ${audioBuffer.byteLength} bytes`);
       
       // Send audio to OpenAI
-      this.openAIService.sendAudioData(audioBuffer);
+      await this.agentGraph.invoke(connectionId, { type: 'audio_data', data: audioBuffer });
       
     } catch (error) {
       console.error(`Error processing audio data from ${connectionId}:`, error);
