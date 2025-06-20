@@ -1,34 +1,19 @@
-export interface BaseMessage {
-  type: string;
-  connectionId?: string;
-  timestamp?: Date;
-}
-
-export interface TextMessage extends BaseMessage {
-  type: 'text' | 'echo' | 'error' | 'connected' | 'binary' | 'ai_text_response' | 'speech_detected' | 'ai_session_started' | 'ai_session_stopped';
+export interface Message {
+  type: 'echo' | 'test' | 'text' | 'binary' | 'connected' | 'error' | 'binary_metadata' | 
+        'request_test_audio' | 'audio_data' | 'audio_data_metadata' | 'start_ai_session' | 'stop_ai_session' |
+        'ai_text_response' | 'speech_detected' | 'ai_session_started' | 'ai_session_stopped' | 'ai_session_closing';
   data?: any;
   message?: string;
-}
-
-export interface BinaryMessage extends BaseMessage {
-  type: 'binary_metadata';
-  dataType: string;
-  size: number;
-  toConnectionId?: string;
+  connectionId?: string;
   fromConnectionId?: string;
+  toConnectionId?: string;
+  timestamp?: Date;
+  size?: number;
+  dataType?: string;
 }
-
-export interface AudioMessage extends BaseMessage {
-  type: 'request_test_audio' | 'audio_data' | 'start_ai_session' | 'stop_ai_session';
-  format?: string;
-  sampleRate?: number;
-  data?: any;
-}
-
-export type Message = TextMessage | BinaryMessage | AudioMessage;
 
 export interface MessageHandlerContext {
   connectionId: string;
   message: Message;
   binaryData?: ArrayBuffer;
-} 
+}

@@ -74,6 +74,8 @@ export const useMicrophone = (
 
   const startMic = async () => {
     try {
+      console.log('Starting microphone with options:', { sampleRate, chunkSize });
+      
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
           sampleRate: sampleRate,
@@ -84,7 +86,21 @@ export const useMicrophone = (
         } 
       });
       
+      console.log('Microphone stream obtained:', stream.getAudioTracks()[0].getSettings());
       mediaStreamRef.current = stream;
+      
+      // Check if the audio track is active
+      const audioTrack = stream.getAudioTracks()[0];
+      console.log('Audio track state:', {
+        enabled: audioTrack.enabled,
+        readyState: audioTrack.readyState,
+        muted: audioTrack.muted
+      });
+      
+      if (audioTrack.readyState !== 'live') {
+        console.error('Audio track is not live:', audioTrack.readyState);
+        throw new Error('Microphone track is not live');
+      }
       
       // Create audio context with modern API
       audioContextRef.current = new AudioContext({
@@ -92,9 +108,27 @@ export const useMicrophone = (
       });
       
       const audioContext = audioContextRef.current;
+      console.log('AudioContext created:', {
+        state: audioContext.state,
+        sampleRate: audioContext.sampleRate
+      });
+      
+      // Resume audio context if suspended
+      if (audioContext.state === 'suspended') {
+        console.log('Resuming suspended AudioContext...');
+        await audioContext.resume();
+        console.log('AudioContext resumed, state:', audioContext.state);
+      }
+      
+      // Test if audio context is running
+      if (audioContext.state !== 'running') {
+        console.error('AudioContext failed to start, state:', audioContext.state);
+        throw new Error('AudioContext is not running. This may require user interaction.');
+      }
       
       // Create source from media stream
       sourceRef.current = audioContext.createMediaStreamSource(stream);
+      console.log('MediaStreamSource created');
       
       // Create audio worklet processor for modern audio processing
       try {
@@ -117,8 +151,15 @@ export const useMicrophone = (
               
               process(inputs, outputs, parameters) {
                 const input = inputs[0];
-                if (input.length > 0) {
+                
+                // Debug logging for input
+                if (input.length > 0 && input[0]) {
                   const inputData = input[0]; // Get mono channel
+                  
+                  // Log occasionally to avoid spam
+                  if (this.totalSamples % 4800 === 0) { // Log every ~200ms at 24kHz
+                    console.log('AudioWorklet processing: ' + inputData.length + ' samples, total: ' + this.totalSamples);
+                  }
                   
                   // Add to buffer
                   this.audioBuffer.push(new Float32Array(inputData));
@@ -126,6 +167,8 @@ export const useMicrophone = (
                   
                   // Send chunk when we have enough samples
                   if (this.totalSamples >= this.chunkSize) {
+                    console.log('AudioWorklet: Creating chunk with ' + this.totalSamples + ' samples (target: ' + this.chunkSize + ')');
+                    
                     // Combine buffered audio
                     const combinedBuffer = new Float32Array(this.totalSamples);
                     let offset = 0;
@@ -149,6 +192,11 @@ export const useMicrophone = (
                     this.audioBuffer = remaining.length > 0 ? [remaining] : [];
                     this.totalSamples = remaining.length;
                   }
+                } else {
+                  // Log if no input is being received
+                  if (this.totalSamples === 0) {
+                    console.warn('AudioWorklet: No audio input received');
+                  }
                 }
                 
                 return true;
@@ -168,6 +216,7 @@ export const useMicrophone = (
         
         // Handle messages from worklet
         workletNodeRef.current.port.onmessage = (event) => {
+          console.log('Received message from AudioWorklet:', event.data.type);
           if (event.data.type === 'audioChunk') {
             const audioData = event.data.data;
             
@@ -193,7 +242,11 @@ export const useMicrophone = (
         
         // Connect nodes - DON'T connect to destination to avoid feedback
         sourceRef.current.connect(workletNodeRef.current);
+        console.log('Audio nodes connected');
         // workletNodeRef.current.connect(audioContext.destination); // Removed to prevent feedback
+        
+        // Start processing
+        console.log('AudioWorklet setup complete, waiting for audio input...');
         
       } catch (workletError) {
         console.warn('AudioWorklet not supported, falling back to ScriptProcessorNode:', workletError);
@@ -207,6 +260,17 @@ export const useMicrophone = (
         processorNode.onaudioprocess = (event) => {
           const inputBuffer = event.inputBuffer;
           const inputData = inputBuffer.getChannelData(0); // Get mono channel
+          
+          // Debug logging
+          console.log(`ScriptProcessor: Processing ${inputData.length} samples, total: ${totalSamples}`);
+          
+          // Check if we have actual audio data (not just zeros)
+          const hasAudio = inputData.some(sample => Math.abs(sample) > 0.001);
+          if (hasAudio) {
+            console.log('ScriptProcessor: Audio detected!');
+          } else if (totalSamples === 0) {
+            console.log('ScriptProcessor: No audio detected in input');
+          }
           
           // Resample if needed
           const resampledData = resampleAudio(
@@ -236,6 +300,9 @@ export const useMicrophone = (
             // Convert to PCM16
             const pcm16Data = float32ToPCM16(chunkData);
             
+            // Debug logging
+            console.log(`Generated audio chunk (fallback): ${pcm16Data.buffer.byteLength} bytes`);
+            
             // Send as ArrayBuffer
             if (onAudioChunk) {
               onAudioChunk(pcm16Data.buffer);
@@ -248,9 +315,9 @@ export const useMicrophone = (
           }
         };
         
-        // Connect nodes
+        // Connect nodes - DON'T connect to destination to avoid feedback
         sourceRef.current.connect(processorNode);
-        processorNode.connect(audioContext.destination);
+        // processorNode.connect(audioContext.destination); // Removed to prevent feedback
         
         // Store reference for cleanup
         workletNodeRef.current = processorNode as any;
@@ -264,7 +331,9 @@ export const useMicrophone = (
     }
   };
 
-  const stopMic = () => {
+  const stopMic = useCallback(() => {
+    if (!mediaStreamRef.current) return;
+
     // Disconnect audio nodes
     if (workletNodeRef.current) {
       workletNodeRef.current.disconnect();
@@ -287,14 +356,14 @@ export const useMicrophone = (
       mediaStreamRef.current.getTracks().forEach(track => track.stop());
       mediaStreamRef.current = null;
     }
-    
+
+    setMicActive(false);
     onMessage('Microphone stopped.');
-  };
+  }, [onMessage]);
 
   const toggleMic = async () => {
     if (micActive) {
       stopMic();
-      setMicActive(false);
       if (onMicStop) {
         onMicStop();
       }

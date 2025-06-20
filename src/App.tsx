@@ -19,6 +19,7 @@ const App: React.FC = () => {
 
   // Handler for audio chunks
   const handleAudioChunk = (chunk: ArrayBuffer) => {
+    console.log(`App received audio chunk: ${chunk.byteLength} bytes, connected: ${isConnected}, AI active: ${isAISessionActive}`);
     if (isConnected) {
       sendBinaryData(chunk, 'audio');
     }
@@ -60,6 +61,12 @@ const App: React.FC = () => {
     addMessage('Requested test audio from backend');
   };
 
+  const prevIsAISessionActiveRef = useRef<boolean>(isAISessionActive);
+  React.useEffect(() => {
+    prevIsAISessionActiveRef.current = isAISessionActive;
+  });
+  const prevIsAISessionActive = prevIsAISessionActiveRef.current;
+
   // Store latest stopMic reference
   const stopMicRef = useRef(stopMic);
   React.useEffect(() => {
@@ -68,10 +75,10 @@ const App: React.FC = () => {
 
   // Stop microphone when AI session ends from the server
   React.useEffect(() => {
-    if (!isAISessionActive && micActive) {
+    if (prevIsAISessionActive && !isAISessionActive && micActive) {
       stopMicRef.current();
     }
-  }, [isAISessionActive, micActive]);
+  }, [isAISessionActive, micActive, prevIsAISessionActive]);
 
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col">

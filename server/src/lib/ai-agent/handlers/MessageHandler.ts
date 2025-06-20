@@ -110,6 +110,14 @@ export class MessageHandler {
       console.log('OpenAI session closing, notifying all active clients', event);
       for (const [connectionId, connectionState] of this.activeConnections) {
         if (connectionState.openAIConnected) {
+          // Send a specific closing event to the client
+          await this.connectionService.sendMessage(connectionId, {
+            type: 'ai_session_closing',
+            data: { reason: 'Tool call `close_session` initiated.' }
+          });
+          
+          // The client is now expected to close the connection after receiving this.
+          // We will still stop the session on the backend.
           await this.handleStopAISession(connectionId);
         }
       }
@@ -132,10 +140,15 @@ export class MessageHandler {
         case 'audio_data':
           await this.handleAudioData(connectionId, message.data);
           break;
+        case 'audio_data_metadata':
+          // This indicates that the next binary message should be treated as audio data
+          console.log(`Expecting audio data from ${connectionId}: ${message.size} bytes`);
+          break;
         case 'binary':
           // Handle binary data as audio if AI session is active
           const connectionState = this.activeConnections.get(connectionId);
           if (connectionState?.openAIConnected && context.binaryData) {
+            console.log(`Received binary audio data from ${connectionId}: ${context.binaryData.byteLength} bytes`);
             await this.handleAudioData(connectionId, context.binaryData);
           }
           break;
